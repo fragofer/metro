@@ -1,3 +1,9 @@
 .idea/
 cmake-build-debug/
 cmake-build-release/
+*CMakeFiles/
+*cmake_install.cmake
+*CMakeCache.txt
+*Makefile
+src/metro_automoc.cpp
+src/metro

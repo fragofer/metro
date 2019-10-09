@@ -25,6 +25,9 @@
 #define __VCGLIB__SAMPLING
 
 #include <time.h>
+#include <thread>
+#include <atomic>
+#include <mutex>
 #include <vcg/complex/algorithms/closest.h>
 #include <vcg/space/box3.h>
 #include <vcg/math/histogram.h>
@@ -113,8 +116,8 @@ private:
     Histogram<double>            hist;
     unsigned long   n_total_samples;
     unsigned long   n_total_area_samples;
-    unsigned long   n_total_edge_samples;
-    unsigned long   n_total_vertex_samples;
+    std::atomic<unsigned long>   n_total_edge_samples;
+    std::atomic<unsigned long>   n_total_vertex_samples;
     double          max_dist;
     double          mean_dist;
     double          RMS_dist;
@@ -123,14 +126,18 @@ private:
 
     // globals
     int             n_samples;
+	std::atomic<unsigned int>   threads_running = { 0 };
+
 
     // private methods
     inline double   ComputeMeshArea(MetroMesh & mesh);
     float           AddSample(const Point3x &p);
     inline void     AddRandomSample(FaceIterator &T);
     inline void     SampleEdge(const Point3x & v0, const Point3x & v1, int n_samples_per_edge);
-    void            VertexSampling();
+	void            VertexSampling();
+    void            ThreadedVertexSampling(unsigned int threadIndex, unsigned int beginIndex, unsigned int endIndex);
     void            EdgeSampling();
+	void 			ThreadedEdgeSampling(unsigned int threadIndex, std::vector< std::pair<VertexPointer, VertexPointer> > &Edges, unsigned int beginIndex, unsigned int endIndex);
     void            FaceSubdiv(const Point3x & v0, const Point3x &v1, const Point3x & v2, int maxdepth);
     void            SimilarTriangles(const Point3x &v0, const Point3x &v1, const Point3x &v2, int n_samples_per_edge);
     void            MontecarloFaceSampling();
@@ -225,6 +232,8 @@ inline double Sampling<MetroMesh>::ComputeMeshArea(MetroMesh & mesh)
 	return area/2.0;
 }
 
+std::mutex dist_metrics_mutex;
+
 template <class MetroMesh>
 float Sampling<MetroMesh>::AddSample(const Point3x &p )
 {
@@ -250,6 +259,8 @@ float Sampling<MetroMesh>::AddSample(const Point3x &p )
     if(dist == dist_upper_bound)
         return -1.0;
 
+	dist_metrics_mutex.lock();
+
     if(dist > max_dist)
         max_dist = dist;        // L_inf
     mean_dist += dist;	        // L_1
@@ -258,6 +269,8 @@ float Sampling<MetroMesh>::AddSample(const Point3x &p )
 
     if(Flags &  SamplingFlags::HIST)
         hist.Add((float)fabs(dist));
+
+	dist_metrics_mutex.unlock();
 
     return (float)dist;
 }
@@ -269,31 +282,50 @@ float Sampling<MetroMesh>::AddSample(const Point3x &p )
 template <class MetroMesh>
 void Sampling<MetroMesh>::VertexSampling()
 {
-    // Vertex sampling.
-    int   cnt = 0;
-    float error;
+	printf("Vertex sampling\n");
+	int numThreads = 8;
+	unsigned int per_thread = static_cast<unsigned int>(S1.vert.size()) / numThreads + 1;
+	vector<std::thread> threads;
+	for (unsigned int i = 0; i < numThreads; i++) {
+		threads.push_back(std::thread(&Sampling::ThreadedVertexSampling, this, i, i * per_thread, (i + 1) * per_thread));
+	}
+	// print progress information
+	while(threads_running > 0) {
+		printf("Sampling vertices %d%%\r", (100 * n_total_vertex_samples/S1.vn));
+		fflush(stdout);
+		std::this_thread::sleep_for(std::chrono::seconds(30));
+	}
 
-    printf("Vertex sampling\n");
-    VertexIterator vi;
-        typename std::vector<VertexPointer>::iterator vif;
-    for(vi=S1.vert.begin();vi!=S1.vert.end();++vi)
-            if(  (*vi).IsUserBit(referredBit) || // it is referred
-                    ((Flags&SamplingFlags::INCLUDE_UNREFERENCED_VERTICES) != 0) ) //include also unreferred
-    {
-        error = AddSample((*vi).cP());
-
-        n_total_vertex_samples++;
-
-        // save vertex quality
-        if(Flags & SamplingFlags::SAVE_ERROR)  (*vi).Q() = error;
-
-        // print progress information
-        if(!(++cnt % print_every_n_elements))
-            printf("Sampling vertices %d%%\r", (100 * cnt/S1.vn));
+	for (auto it=threads.begin(); it!=threads.end();++it) {
+        it->join();
     }
-    printf("                       \r");
+	printf("                       \r");
 }
 
+template <class MetroMesh>
+void Sampling<MetroMesh>::ThreadedVertexSampling(unsigned int threadIndex, unsigned int beginIndex, unsigned int endIndex)
+{
+	threads_running++;
+	float error;
+	VertexIterator vi = S1.vert.begin();
+
+	// Iterate to the first vertex assigned to this thread
+	for(unsigned int i = 0; i < beginIndex; i++) vi++;
+
+	for(unsigned int cnt = beginIndex; cnt < endIndex && vi!=S1.vert.end(); ++vi, cnt++) {
+        if((*vi).IsUserBit(referredBit) || // it is referred
+                ((Flags&SamplingFlags::INCLUDE_UNREFERENCED_VERTICES) != 0) ) //include also unreferred
+	    {
+	        error = AddSample((*vi).cP());
+
+			n_total_vertex_samples++;
+
+	        // save vertex quality
+	        if(Flags & SamplingFlags::SAVE_ERROR)  (*vi).Q() = error;
+	    }
+	}
+	threads_running--;
+}
 
 // -----------------------------------------------------------------------------------------------
 // --- Edge Sampling -----------------------------------------------------------------------------
@@ -317,8 +349,8 @@ template <class MetroMesh>
 void Sampling<MetroMesh>::EdgeSampling()
 {
 	// Edge sampling.
-		typedef std::pair<VertexPointer, VertexPointer> pvv;
-		std::vector< pvv > Edges;
+	typedef std::pair<VertexPointer, VertexPointer> pvv;
+	std::vector< pvv > Edges;
 
 	printf("Edge sampling\n");
 
@@ -335,27 +367,60 @@ void Sampling<MetroMesh>::EdgeSampling()
         typename std::vector< pvv>::iterator edgeend = unique(Edges.begin(), Edges.end());
     Edges.resize(edgeend-Edges.begin());
 
+
+	if (Edges.size() > 0) {
+		int numThreads = 8;
+		unsigned int per_thread = static_cast<unsigned int>(Edges.size()) / numThreads + 1;
+		vector<std::thread> threads;
+		for (unsigned int i = 0; i < numThreads; i++) {
+			threads.push_back(std::thread(&Sampling::ThreadedEdgeSampling, this, i, std::ref(Edges), i * per_thread, (i + 1) * per_thread));
+		}
+
+		// print progress information
+		while(threads_running > 0) {
+			printf("Sampling edge %lu%%\r", (100 * n_total_edge_samples/Edges.size()));
+			fflush(stdout);
+			std::this_thread::sleep_for(std::chrono::seconds(30));
+		}
+
+		for (auto it=threads.begin(); it!=threads.end();++it) {
+	        it->join();
+	    }
+		printf("                       \r");
+	}
+}
+
+template <class MetroMesh>
+void Sampling<MetroMesh>::ThreadedEdgeSampling(unsigned int threadIndex, std::vector<std::pair<VertexPointer, VertexPointer> > &Edges, unsigned int beginIndex, unsigned int endIndex)
+{
+
+	threads_running++;
 	// sample edges.
-		typename std::vector<pvv>::iterator   ei;
 	double                  n_samples_per_length_unit;
 	double                  n_samples_decimal = 0.0;
-	int                     cnt=0;
+	int n_samples;
 	if(Flags & SamplingFlags::FACE_SAMPLING)
 		n_samples_per_length_unit = sqrt((double)n_samples_per_area_unit);
 	else
 		n_samples_per_length_unit = n_samples_per_area_unit;
-	for(ei=Edges.begin(); ei!=Edges.end(); ++ei)
-	{
+
+	typename std::vector<std::pair<VertexPointer, VertexPointer>>::iterator ei = Edges.begin();
+
+	// Iterate to the first edge assigned to this thread
+	for(unsigned int i = 0; i < beginIndex; i++) {
+		n_samples_decimal += Distance((*ei).first->cP(),(*ei).second->cP()) * n_samples_per_length_unit;
+		n_samples          = (int) n_samples_decimal;
+		n_samples_decimal -= (double) n_samples;
+		ei++;
+	}
+
+	for(unsigned int cnt = beginIndex; cnt < endIndex && ei!=Edges.end(); ++ei, cnt++) {
 		n_samples_decimal += Distance((*ei).first->cP(),(*ei).second->cP()) * n_samples_per_length_unit;
 		n_samples          = (int) n_samples_decimal;
 		SampleEdge((*ei).first->cP(), (*ei).second->cP(), (int) n_samples);
 		n_samples_decimal -= (double) n_samples;
-
-        // print progress information
-        if(!(++cnt % print_every_n_elements))
-            printf("Sampling edge %lu%%\r", (100 * cnt/Edges.size()));
     }
-    printf("                     \r");
+	threads_running--;
 }
 
 

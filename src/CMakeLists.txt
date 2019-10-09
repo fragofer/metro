@@ -20,7 +20,7 @@ set(SOURCE_FILES
 set(CMAKE_AUTOMOC ON)
 
 # set to the proper directory in your machine
-set(Qt5_cmake_DIR /Users/pachi/software/Qt560/5.6/clang_64/lib/cmake)
+set(Qt5_cmake_DIR /home/nico/Qt/5.13.1/gcc_64/lib/cmake)
 
 # This is needded for CMake to find the Qt libraries
 set(CMAKE_PREFIX_PATH
@@ -41,7 +41,7 @@ find_package(Qt5Widgets)
 #find_package(Qt5Svg)
 
 
-include_directories(/Users/pachi/software/vcglib)
+include_directories(/home/nico/repos/vcglib)
 
 add_executable(metro ${SOURCE_FILES} metro.cpp)
 
