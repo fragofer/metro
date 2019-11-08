@@ -97,7 +97,7 @@ private:
     MetroMeshAABB   tS2;
     MetroMeshOctree oS2;
 
-
+		int n_threads;
 		unsigned int n_samples_per_face    ;
 		float n_samples_edge_to_face_ratio ;
 		float bbox_factor                  ;
@@ -166,6 +166,7 @@ public :
     void            SetParam(double _n_samp)    {n_samples_target = _n_samp;}
     void            SetSamplesTarget(unsigned long _n_samp);
     void            SetSamplesPerAreaUnit(double _n_samp);
+    void            SetThreads(int _n_threads);
 };
 
 // -----------------------------------------------------------------------------------------------
@@ -217,6 +218,11 @@ void Sampling<MetroMesh>::SetSamplesPerAreaUnit(double _n_samp)
     n_samples_target        = (unsigned long)((double) n_samples_per_area_unit * area_S1);
 }
 
+template <class MetroMesh>
+void Sampling<MetroMesh>::SetThreads(int _n_threads)
+{
+    n_threads = _n_threads;
+}
 
 // auxiliary functions
 template <class MetroMesh>
@@ -283,10 +289,9 @@ template <class MetroMesh>
 void Sampling<MetroMesh>::VertexSampling()
 {
 	printf("Vertex sampling\n");
-	int numThreads = 8;
-	unsigned int per_thread = static_cast<unsigned int>(S1.vert.size()) / numThreads + 1;
+	unsigned int per_thread = static_cast<unsigned int>(S1.vert.size()) / n_threads + 1;
 	vector<std::thread> threads;
-	for (unsigned int i = 0; i < numThreads; i++) {
+	for (unsigned int i = 0; i < n_threads; i++) {
 		threads.push_back(std::thread(&Sampling::ThreadedVertexSampling, this, i, i * per_thread, (i + 1) * per_thread));
 	}
 	// print progress information
@@ -369,10 +374,10 @@ void Sampling<MetroMesh>::EdgeSampling()
 
 
 	if (Edges.size() > 0) {
-		int numThreads = 8;
-		unsigned int per_thread = static_cast<unsigned int>(Edges.size()) / numThreads + 1;
+		int n_threads = 8;
+		unsigned int per_thread = static_cast<unsigned int>(Edges.size()) / n_threads + 1;
 		vector<std::thread> threads;
-		for (unsigned int i = 0; i < numThreads; i++) {
+		for (unsigned int i = 0; i < n_threads; i++) {
 			threads.push_back(std::thread(&Sampling::ThreadedEdgeSampling, this, i, std::ref(Edges), i * per_thread, (i + 1) * per_thread));
 		}
 

@@ -240,6 +240,7 @@ int main(int argc, char**argv)
     unsigned long         n_samples_target, elapsed_time;
     double								n_samples_per_area_unit;
     int                   flags;
+    int                   number_of_threads = std::thread::hardware_concurrency();
     std::string           obase_name;
 
     // print program info
@@ -287,6 +288,7 @@ int main(int argc, char**argv)
         case 'H':  flags |= SamplingFlags::USE_HASH_GRID;   printf("Using hashed uniform grid as search structure\n"); break;
 				case 'O':  flags |= SamplingFlags::USE_OCTREE;      printf("Using octree as search structure\n");              break;
         case 'o':  flags |= SamplingFlags::OUTPUT_NAME;      obase_name = argv[i+1]; i++;              break;
+        case 't':  number_of_threads     =  atoi(&(argv[i][2]));          break;
         default  :  printf(MSG_ERR_INVALID_OPTION, argv[i]);
           exit(0);
       }
@@ -337,6 +339,9 @@ int main(int argc, char**argv)
 
     Sampling<CMesh> ForwardSampling(S1,S2);
     Sampling<CMesh> BackwardSampling(S2,S1);
+
+    ForwardSampling.SetThreads(number_of_threads);
+    BackwardSampling.SetThreads(number_of_threads);
 
     ForwardSampling.SetFlags(flags);
     BackwardSampling.SetFlags(flags);
